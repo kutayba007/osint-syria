@@ -49,32 +49,11 @@ class AppConfig:
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     geo: GeoConfig = field(default_factory=GeoConfig)
 
-    # === Syria monitoring channels (public Telegram channels) ===
-    monitored_channels: List[str] = field(default_factory=lambda: [
-        # VERIFIED WORKING CHANNELS (August 2026) — 20+ CHANNELS
-        # === HIGH PRIORITY ===
-        "IdlibPlus",           # IDLIB PLUS — حرب إدلب
-        "NorthPress",          # North Press — شمال سوريا
-        "QalaatAlMudiq",       # Qalaat Al Mudiq — حماة
-        "ARA_News",            # ARA News — أخبار كردية
-        "liveuamap",           # Liveuamap — خرائط حية
-        "SyriaMonitor",        # رصد وتحليل الأخبار السورية
-        "SyriaNewsLive",       # سوريا مباشر
-        "SyriaBreakingNews",   # عاجل — أخبار عاجلة
-        "Raqqa_Sl",            # الرقة تذبح بصمت
-        "HasakaNow",           # الحسكة الآن
-        "SyriaCivilDefense",   # الدفاع المدني السوري
-        # === MEDIUM PRIORITY ===
-        "KurdishQuestion",     # Kurdish Question
-        "ISWNews",             # ISW News
-        "WarMonitors",         # Global News Monitor
-        "syriareport",         # Syria Report
-        "SURYAA",              # SURYAA
-        "ELINTNews",           # ELINT News
-        # === LOW PRIORITY ===
-        "Damascus_Syria",      # دمشق
-        "HRN17",               # HRN17
-    ])
+    # === Syria monitoring channels — loaded from channels.py ===
+    @property
+    def monitored_channels(self) -> List[str]:
+        from config.channels import CHANNEL_USERNAMES
+        return CHANNEL_USERNAMES
 
     # === Event severity levels ===
     threat_levels: dict = field(default_factory=lambda: {
