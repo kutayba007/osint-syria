@@ -1,0 +1,51 @@
+# OSINT Syria - Git Ignore
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+
+# === Telethon Session ===
+*.session
+*.session-journal
+
+# === Logs ===
+*.log
+logs/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Project Specific ===
+credentials/
+service-account*.json
+token*.json
+osint_syria.log
+
+# === Build ===
+dist/
+build/
+*.egg-info/
+
+# === Supabase ===
+.supabase/
