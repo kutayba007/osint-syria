@@ -1,475 +1,215 @@
 """
-OSINT Syria - Tactical Dashboard
-Streamlit-powered interactive command center with live threat map.
+OSINT Syria — Tactical Dashboard (Self-Contained)
+Connects directly to Supabase. No parent project imports needed.
 """
 
 import streamlit as st
 import pandas as pd
-import pydeck as pdk
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import sys
 import os
 
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-from config.settings import config
-from src.database.supabase_client import SupabaseDB
 
-# === Page Config ===
-st.set_page_config(
-    page_title="OSINT Syria — مركز القيادة",
-    page_icon="🇸🇾",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+def get_supabase():
+    url = os.getenv("SUPABASE_URL", "")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not url or not key:
+        st.error("❌ SUPABASE_URL and SUPABASE_KEY are required! Set them in Streamlit Cloud secrets or .env")
+        st.stop()
+    from supabase import create_client
+    return create_client(url, key)
 
-# === Dark Theme CSS ===
+
+st.set_page_config(page_title="OSINT Syria", page_icon="🇸🇾", layout="wide", initial_sidebar_state="expanded")
+
 st.markdown("""
 <style>
-    /* Dark background */
-    .stApp {
-        background-color: #0a0a0f;
-        color: #e0e0e0;
-    }
-    
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background-color: #111118;
-    }
-    
-    /* Metrics */
+    .stApp { background-color: #0a0a0f; color: #e0e0e0; }
+    [data-testid="stSidebar"] { background-color: #111118; }
     [data-testid="stMetric"] {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #333;
-        border-radius: 12px;
-        padding: 16px;
+        border: 1px solid #333; border-radius: 12px; padding: 16px;
     }
-    
-    [data-testid="stMetricValue"] {
-        color: #00d4ff !important;
-        font-size: 2rem !important;
-    }
-    
-    /* Headers */
-    h1, h2, h3 {
-        color: #00d4ff !important;
-        text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
-    }
-    
-    /* Threat level badges */
-    .threat-critical {
-        background: linear-gradient(135deg, #ff1744 0%, #d50000 100%);
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-        animation: pulse 1.5s infinite;
-    }
-    .threat-high {
-        background: linear-gradient(135deg, #ff9100 0%, #ff6d00 100%);
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
-    .threat-medium {
-        background: linear-gradient(135deg, #ffd600 0%, #ffc400 100%);
-        color: #333;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
-    .threat-low {
-        background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
-        color: #333;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
-    
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.6; }
-        100% { opacity: 1; }
-    }
-    
-    /* Event cards */
-    .event-card {
-        background: #1a1a2e;
-        border: 1px solid #333;
-        border-radius: 12px;
-        padding: 16px;
-        margin: 8px 0;
-        border-left: 4px solid #00d4ff;
-    }
-    
-    /* Footer */
-    .footer {
-        text-align: center;
-        color: #555;
-        padding: 20px;
-        font-size: 0.8em;
-    }
+    [data-testid="stMetricValue"] { color: #00d4ff !important; font-size: 2rem !important; }
+    h1, h2, h3 { color: #00d4ff !important; }
+    .tc { background: linear-gradient(135deg, #ff1744, #d50000); color: white; padding: 4px 12px; border-radius: 20px; font-weight: bold; animation: pulse 1.5s infinite; }
+    .th { background: linear-gradient(135deg, #ff9100, #ff6d00); color: white; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
+    .tm { background: linear-gradient(135deg, #ffd600, #ffc400); color: #333; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
+    .tl { background: linear-gradient(135deg, #00e676, #00c853); color: #333; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
+    @keyframes pulse { 0%{opacity:1} 50%{opacity:0.6} 100%{opacity:1} }
+    .ec { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 16px; margin: 8px 0; }
 </style>
 """, unsafe_allow_html=True)
 
 
-def init_db():
-    """Initialize database connection."""
-    if "db" not in st.session_state:
-        db = SupabaseDB()
-        db.connect()
-        st.session_state.db = db
-    return st.session_state.db
-
-
-def load_data(db, hours=24):
-    """Load events from database."""
-    events = db.get_recent_events(hours=hours)
-    if events:
-        return pd.DataFrame(events)
+@st.cache_data(ttl=30)
+def load_events(hours: int) -> pd.DataFrame:
+    sb = get_supabase()
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    for tbl in ["events", "osint_events"]:
+        try:
+            r = sb.table(tbl).select("*").gte("timestamp_utc", since).order("timestamp_utc", desc=True).limit(200).execute()
+            if r.data:
+                df = pd.DataFrame(r.data)
+                st.session_state["table"] = tbl
+                return df
+        except Exception:
+            pass
+    # Fallback without time filter
+    for tbl in ["events", "osint_events"]:
+        try:
+            r = sb.table(tbl).select("*").order("created_at", desc=True).limit(200).execute()
+            if r.data:
+                df = pd.DataFrame(r.data)
+                st.session_state["table"] = tbl
+                return df
+        except Exception:
+            pass
     return pd.DataFrame()
 
 
-def render_header():
-    """Render the main header."""
-    st.markdown("""
-    <div style='text-align: center; padding: 20px 0;'>
-        <h1 style='font-size: 2.5em; margin: 0;'>🇸🇾 OSINT SYRIA</h1>
-        <p style='color: #888; font-size: 1.1em; margin-top: 5px;'>
-            منصة استخبارات مصادر مفتوحة وإنذار مبكر
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_metrics(df):
-    """Render top-level metrics."""
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    total = len(df)
-    critical = len(df[df["threat_level"] == "critical"]) if "threat_level" in df.columns else 0
-    high = len(df[df["threat_level"] == "high"]) if "threat_level" in df.columns else 0
-    avg_conf = df["confidence"].mean() if "confidence" in df.columns and len(df) > 0 else 0
-    gov_count = df["governorate"].nunique() if "governorate" in df.columns else 0
-
-    with col1:
-        st.metric("📨 إجمالي الأحداث", total)
-    with col2:
-        st.metric("🔴 حرجة", critical, delta=None)
-    with col3:
-        st.metric("🟠 عالية", high, delta=None)
-    with col4:
-        st.metric("🎯 متوسط الثقة", f"{avg_conf:.0%}")
-    with col5:
-        st.metric("🏛 المحافظات", gov_count)
-
-
-def render_threat_map(df):
-    """Render the interactive threat map using PyDeck."""
-    st.markdown("### 🗺️ الخريطة التكتيكية الحية")
-
-    if df.empty or "latitude" not in df.columns:
-        st.info("📭 لا توجد بيانات جغرافية لعرضها حالياً")
-        return
-
-    # Filter events with coordinates
-    map_df = df.dropna(subset=["latitude", "longitude"])
-
-    if map_df.empty:
-        st.info("📭 لا توجد إحداثيات متاحة")
-        return
-
-    # Color mapping for threat levels
-    color_map = {
-        "critical": [255, 23, 68],      # Red
-        "high": [255, 145, 0],           # Orange
-        "medium": [255, 214, 0],         # Yellow
-        "low": [0, 230, 118],            # Green
-    }
-
-    map_df = map_df.copy()
-    map_df["color"] = map_df["threat_level"].map(color_map).apply(
-        lambda x: x if x else [100, 100, 100]
-    )
-    map_df["radius"] = map_df["threat_level"].map({
-        "critical": 3000,
-        "high": 2000,
-        "medium": 1200,
-        "low": 800,
-    }).fillna(800)
-
-    # Scatterplot Layer — event markers
-    scatter_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position=["longitude", "latitude"],
-        get_color="color",
-        get_radius="radius",
-        opacity=0.7,
-        pickable=True,
-        auto_highlight=True,
-    )
-
-    # Text Layer — event labels
-    text_layer = pdk.Layer(
-        "TextLayer",
-        data=map_df,
-        get_position=["longitude", "latitude"],
-        get_text="event_type",
-        get_size=14,
-        get_color=[255, 255, 255],
-        get_alignment_baseline="'bottom'",
-        get_pixel_offset=[0, -20],
-    )
-
-    # Heatmap Layer
-    heatmap_layer = pdk.Layer(
-        "HeatmapLayer",
-        data=map_df,
-        get_position=["longitude", "latitude"],
-        get_weight="confidence",
-        radiusPixels=60,
-        intensity=1,
-        threshold=0.05,
-        colorRange=[
-            [0, 255, 200, 50],
-            [0, 200, 255, 100],
-            [0, 100, 255, 150],
-            [100, 0, 255, 200],
-            [255, 0, 100, 255],
-        ],
-    )
-
-    # View state — centered on Syria
-    view_state = pdk.ViewState(
-        latitude=34.8,
-        longitude=38.0,
-        zoom=6,
-        pitch=45,
-    )
-
-    # Render the map
-    st.pydeck_chart(pdk.Deck(
-        layers=[heatmap_layer, scatter_layer, text_layer],
-        initial_view_state=view_state,
-        map_style="mapbox://styles/mapbox/dark-v11",
-        tooltip={
-            "html": """
-                <b style='color: #00d4ff;'>{event_type}</b><br/>
-                📍 {location_name}<br/>
-                🏛 {governorate}<br/>
-                ⚠️ Threat: <b>{threat_level}</b><br/>
-                <i>{summary_ar}</i>
-            """,
-            "style": {
-                "backgroundColor": "#1a1a2e",
-                "color": "#e0e0e0",
-                "fontSize": "13px",
-                "padding": "8px",
-                "borderRadius": "8px",
-                "border": "1px solid #00d4ff",
-            }
-        },
-    ))
-
-
-def render_charts(df):
-    """Render analytics charts."""
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("### 📊 توزيع الأحداث حسب النوع")
-        if "event_type" in df.columns and not df.empty:
-            type_counts = df["event_type"].value_counts()
-            fig = px.bar(
-                x=type_counts.values,
-                y=type_counts.index,
-                orientation="h",
-                color=type_counts.values,
-                color_continuous_scale="Viridis",
-            )
-            fig.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#0a0a0f",
-                plot_bgcolor="#0a0a0f",
-                height=400,
-                showlegend=False,
-                margin=dict(l=0, r=0, t=30, b=0),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("📭 لا توجد بيانات كافية")
-
-    with col2:
-        st.markdown("### 🏛 توزيع الأحداث حسب المحافظة")
-        if "governorate" in df.columns and not df.empty:
-            gov_counts = df["governorate"].value_counts().head(10)
-            fig = px.pie(
-                values=gov_counts.values,
-                names=gov_counts.index,
-                color_discrete_sequence=px.colors.qualitative.Dark24,
-                hole=0.4,
-            )
-            fig.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#0a0a0f",
-                height=400,
-                margin=dict(l=0, r=0, t=30, b=0),
-                font=dict(color="#e0e0e0"),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("📭 لا توجد بيانات كافية")
-
-    # Timeline
-    st.markdown("### ⏱ خط زمني للأحداث")
-    if "timestamp" in df.columns and not df.empty:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df_sorted = df.sort_values("timestamp")
-
-        fig = px.scatter(
-            df_sorted,
-            x="timestamp",
-            y="threat_level",
-            color="threat_level",
-            color_discrete_map={
-                "critical": "#ff1744",
-                "high": "#ff9100",
-                "medium": "#ffd600",
-                "low": "#00e676",
-            },
-            hover_data=["event_type", "summary_ar", "governorate"],
-            size_max=15,
-        )
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="#0a0a0f",
-            plot_bgcolor="#0a0a0f",
-            height=300,
-            margin=dict(l=0, r=0, t=30, b=0),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-
-def render_events_feed(df):
-    """Render the live events feed."""
-    st.markdown("### 📋 آخر الأحداث")
-
+def normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """Map Supabase column names to dashboard-friendly names."""
     if df.empty:
-        st.info("📭 لا توجد أحداث لعرضها")
-        return
+        return df
+    renames = {
+        "timestamp_utc": "timestamp",
+        "confidence_score": "confidence",
+        "title": "event_type",
+        "title_arabic": "summary_ar",
+        "raw_excerpt_arabic": "summary_ar",
+        "raw_excerpt_english": "summary_en",
+    }
+    for old, new in renames.items():
+        if old in df.columns and new not in df.columns:
+            df = df.rename(columns={old: new})
+    if "threat_level" in df.columns:
+        df["threat_level"] = df["threat_level"].str.lower()
+    return df
 
+
+# === Header ===
+st.markdown("<div style='text-align:center;padding:20px 0'><h1 style='font-size:2.5em;margin:0'>🇸🇾 OSINT SYRIA</h1><p style='color:#888;font-size:1.1em;margin-top:5px'>منصة استخبارات مصادر مفتوحة وإنذار مبكر — AETHON Platform</p></div>", unsafe_allow_html=True)
+
+# === Sidebar ===
+with st.sidebar:
+    st.markdown("## ⚙️ لوحة التحكم")
+    st.markdown("---")
+    hours = st.select_slider("الوقت", options=[6, 12, 24, 48, 72, 168], value=24, format_func=lambda x: f"آخر {x} ساعة")
+    threat_filter = st.multiselect("مستوى الخطورة", ["critical", "high", "medium", "low"], default=["critical", "high", "medium", "low"])
+    st.markdown("---")
+    if st.button("🔄 تحديث البيانات", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    st.markdown(f"<p style='color:#888;font-size:0.85em'>آخر تحديث: {datetime.utcnow().strftime('%H:%M UTC')}</p>", unsafe_allow_html=True)
+
+# === Load & Filter ===
+df = normalize(load_events(hours))
+if not df.empty and "threat_level" in df.columns:
+    df = df[df["threat_level"].isin(threat_filter)]
+
+# === Metrics ===
+c1, c2, c3, c4, c5 = st.columns(5)
+total = len(df)
+critical = int((df["threat_level"] == "critical").sum()) if "threat_level" in df.columns else 0
+high = int((df["threat_level"] == "high").sum()) if "threat_level" in df.columns else 0
+avg_conf = float(df["confidence"].mean()) if "confidence" in df.columns else 0
+gov_count = int(df["governorate"].nunique()) if "governorate" in df.columns else 0
+c1.metric("📨 إجمالي الأحداث", total)
+c2.metric("🔴 حرجة", critical)
+c3.metric("🟠 عالية", high)
+c4.metric("🎯 متوسط الثقة", f"{avg_conf:.0%}")
+c5.metric("🏛 المحافظات", gov_count)
+
+st.markdown("---")
+
+# === Map ===
+st.markdown("### 🗺️ الخريطة التكتيكية الحية")
+if df.empty or "latitude" not in df.columns:
+    st.info("📭 لا توجد بيانات — شغّل الـ Pipeline لجمع البيانات الحية.")
+else:
+    mdf = df.dropna(subset=["latitude", "longitude"]).copy()
+    if not mdf.empty:
+        cmap = {"critical": "#ff1744", "high": "#ff9100", "medium": "#ffd600", "low": "#00e676"}
+        mdf["color"] = mdf["threat_level"].map(cmap).fillna("#888")
+        mdf["size"] = mdf["threat_level"].map({"critical": 40, "high": 28, "medium": 18, "low": 12}).fillna(12)
+        hdata = {"location_name": True, "governorate": True, "latitude": False, "longitude": False, "size": False}
+        if "summary_ar" in mdf.columns:
+            hdata["summary_ar"] = True
+        fig = px.scatter_geo(mdf, lat="latitude", lon="longitude", color="threat_level", size="size", color_discrete_map=cmap, hover_name="event_type" if "event_type" in mdf.columns else None, hover_data=hdata, projection="natural earth")
+        fig.update_geos(center=dict(lat=34.8, lon=38.0), projection_scale=6, showcountries=True, countrycolor="#333", bgcolor="#0a0a0f", landcolor="#111827", oceancolor="#0a0a1a", showocean=True, showland=True)
+        fig.update_layout(template="plotly_dark", paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f", height=500, margin=dict(l=0, r=0, t=0, b=0), legend=dict(font=dict(color="#e0e0e0"), bgcolor="rgba(17,24,39,0.8)"))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("📭 لا توجد إحداثيات")
+
+st.markdown("---")
+
+# === Charts ===
+if not df.empty:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 📊 توزيع الأحداث")
+        if "event_type" in df.columns:
+            vc = df["event_type"].value_counts().head(12)
+            fig = px.bar(x=vc.values, y=vc.index, orientation="h", color=vc.values, color_continuous_scale="Viridis")
+            fig.update_layout(template="plotly_dark", paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f", height=400, showlegend=False, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.markdown("### 🏛 المحافظات")
+        if "governorate" in df.columns:
+            gv = df["governorate"].value_counts().head(10)
+            fig = px.pie(values=gv.values, names=gv.index, color_discrete_sequence=px.colors.qualitative.Dark24, hole=0.4)
+            fig.update_layout(template="plotly_dark", paper_bgcolor="#0a0a0f", height=400, margin=dict(l=0, r=0, t=30, b=0), font=dict(color="#e0e0e0"))
+            st.plotly_chart(fig, use_container_width=True)
+    if "timestamp" in df.columns:
+        st.markdown("### ⏱ خط زمني")
+        tmp = df.copy()
+        tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+        tmp = tmp.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if not tmp.empty:
+            fig = px.scatter(tmp, x="timestamp", y="threat_level", color="threat_level", color_discrete_map={"critical": "#ff1744", "high": "#ff9100", "medium": "#ffd600", "low": "#00e676"})
+            fig.update_layout(template="plotly_dark", paper_bgcolor="#0a0a0f", plot_bgcolor="#0a0a0f", height=300, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("📭 لا توجد بيانات كافية — شغّل الـ Pipeline.")
+
+st.markdown("---")
+
+# === Events Feed ===
+st.markdown("### 📋 آخر الأحداث")
+if df.empty:
+    st.info("📭 لا توجد أحداث — شغّل الـ Pipeline لجمع البيانات الحية من تليجرام.")
+else:
     for _, row in df.head(20).iterrows():
-        threat = row.get("threat_level", "low")
-        css_class = f"threat-{threat}"
-
+        threat = str(row.get("threat_level", "low")).lower()
         icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(threat, "⚪")
+        css = {"critical": "tc", "high": "th", "medium": "tm", "low": "tl"}.get(threat, "tl")
+        etype = row.get("event_type", "") or row.get("category", "") or "غير محدد"
+        summary = row.get("summary_ar", "") or row.get("title_arabic", "") or row.get("raw_excerpt_arabic", "") or row.get("title", "") or ""
+        location = row.get("location_name", "N/A") or "N/A"
+        gov = row.get("governorate", "N/A") or "N/A"
+        channel = row.get("source_channel", "N/A") or "N/A"
+        conf = row.get("confidence", 0) or 0
+        ts = row.get("timestamp", "") or row.get("created_at", "") or ""
 
         st.markdown(f"""
-        <div class="event-card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span class="{css_class}">{icon} {threat.upper()}</span>
-                <span style="color: #888; font-size: 0.85em;">{row.get('timestamp', 'N/A')}</span>
+        <div class="ec" style="border-left: 4px solid {'#ff1744' if threat=='critical' else '#ff9100' if threat=='high' else '#ffd600' if threat=='medium' else '#00e676'}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span class="{css}">{icon} {threat.upper()}</span>
+                <span style="color:#888;font-size:0.85em">{ts}</span>
             </div>
-            <h4 style="margin: 8px 0 4px 0; color: #fff;">{row.get('event_type', 'غير محدد')}</h4>
-            <p style="color: #ccc; margin: 4px 0;">{row.get('summary_ar', 'لا ملخص')}</p>
-            <div style="color: #888; font-size: 0.85em;">
-                📍 {row.get('location_name', 'N/A')} | 🏛 {row.get('governorate', 'N/A')} | 
-                📢 @{row.get('source_channel', 'N/A')} | 🎯 {row.get('confidence', 0):.0%}
-            </div>
+            <h4 style="margin:8px 0 4px 0;color:#fff">{etype}</h4>
+            <p style="color:#ccc;margin:4px 0">{str(summary)[:200]}</p>
+            <div style="color:#888;font-size:0.85em">📍 {location} | 🏛 {gov} | 📢 @{channel} | 🎯 {conf:.0%}</div>
         </div>
         """, unsafe_allow_html=True)
 
-
-def render_sidebar():
-    """Render the sidebar controls."""
-    with st.sidebar:
-        st.markdown("## ⚙️ لوحة التحكم")
-
-        st.markdown("---")
-        st.markdown("### 🔍 فلترة البيانات")
-
-        hours = st.select_slider(
-            "الوقت الحالي",
-            options=[6, 12, 24, 48, 72, 168],
-            value=24,
-            format_func=lambda x: f"آخر {x} ساعة"
-        )
-
-        threat_filter = st.multiselect(
-            "مستوى الخطورة",
-            ["critical", "high", "medium", "low"],
-            default=["critical", "high", "medium", "low"]
-        )
-
-        st.markdown("---")
-        st.markdown("### 📊 إحصائيات سريعة")
-
-        # System status
-        st.markdown("""
-        <div style="background: #1a1a2e; padding: 12px; border-radius: 8px;">
-            <p style="color: #00e676;">🟢 النظام يعمل</p>
-            <p style="color: #888; font-size: 0.85em;">آخر تحديث: just now</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        if st.button("🔄 تحديث البيانات", use_container_width=True):
-            st.rerun()
-
-        st.markdown("---")
-        st.markdown("""
-        <div class="footer">
-            🇸🇾 OSINT Syria<br/>
-            Early Warning System<br/>
-            v1.0.0
-        </div>
-        """, unsafe_allow_html=True)
-
-        return hours, threat_filter
-
-
-def main():
-    """Main dashboard function."""
-    # Initialize
-    db = init_db()
-    render_header()
-
-    # Sidebar
-    hours, threat_filter = render_sidebar()
-
-    # Load data
-    df = load_data(db, hours=hours)
-
-    # Apply filters
-    if not df.empty and "threat_level" in df.columns:
-        df = df[df["threat_level"].isin(threat_filter)]
-
-    # Render sections
-    render_metrics(df)
-    st.markdown("---")
-
-    # Map
-    render_threat_map(df)
-    st.markdown("---")
-
-    # Charts
-    render_charts(df)
-    st.markdown("---")
-
-    # Events feed
-    render_events_feed(df)
-
-    # Auto-refresh
-    st.markdown("""
-    <meta http-equiv="refresh" content="60">
-    """, unsafe_allow_html=True)
-
-
-if __name__ == "__main__":
-    main()
+# Auto-refresh
+st.markdown('<meta http-equiv="refresh" content="60">', unsafe_allow_html=True)
