@@ -18,21 +18,27 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn src.api:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Python path must match Dockerfile WORKDIR (/app)
       - key: PYTHONPATH
-        value: /opt/render/project/src
+        value: /app
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: TELEGRAM_API_ID
+      # ── Telegram credentials (set these in Render Dashboard) ──
+      # The code reads TG_API_ID, TG_API_HASH, TG_BOT_TOKEN, TG_CHAT_ID
+      # NOT TELEGRAM_API_ID — that's a different name!
+      - key: TG_API_ID
         sync: false
-      - key: TELEGRAM_API_HASH
+      - key: TG_API_HASH
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
+      - key: TG_BOT_TOKEN
         sync: false
-      - key: TELEGRAM_CHAT_ID
+      - key: TG_CHAT_ID
         sync: false
-      - key: GROQ_API_KEY
-        sync: false
+      # ── Supabase (set these in Render Dashboard) ──
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
+        sync: false
+      # ── Groq AI (set this in Render Dashboard) ──
+      - key: GROQ_API_KEY
         sync: false

@@ -156,22 +156,42 @@ class SupabaseDB:
         key = (config.supabase.key or "").strip()
 
         if not url or not key:
+            missing = []
+            if not url:
+                missing.append("SUPABASE_URL")
+            if not key:
+                missing.append("SUPABASE_KEY")
             logger.error(
-                "❌ Supabase not configured: SUPABASE_URL / SUPABASE_KEY environment "
-                "variables are missing. Set them on the deployment (Render Dashboard) "
-                "or in .env for local dev."
+                f"❌ Supabase NOT CONFIGURED — missing env vars: {', '.join(missing)}. "
+                f"Set them in Render Dashboard → Environment tab (not in render.yaml)."
             )
             self._connected = False
             return
+
+        logger.info(f"🔗 Connecting to Supabase: {url}")
+        logger.info(f"   Key preview: {key[:12]}... (len={len(key)})")
 
         try:
             self.client = create_client(url, key)
             # Verify connectivity — a bad key/URL fails fast here.
             self.client.table(TABLE_NAME).select("id").limit(1).execute()
             self._connected = True
-            logger.info("✅ Connected to Supabase")
+            logger.info(f"✅ Connected to Supabase — table '{TABLE_NAME}' accessible")
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Supabase: {e}")
+            err_str = str(e).lower()
+            if "permission" in err_str or "rls" in err_str or "403" in err_str:
+                logger.error(
+                    f"❌ Supabase RLS BLOCKED access to table '{TABLE_NAME}'. "
+                    f"Go to Supabase Dashboard → SQL Editor and run: "
+                    f"ALTER TABLE {TABLE_NAME} DISABLE ROW LEVEL SECURITY;"
+                )
+            elif "relation" in err_str or "does not exist" in err_str or "42P01" in err_str:
+                logger.error(
+                    f"❌ Table '{TABLE_NAME}' does not exist in Supabase. "
+                    f"Go to Supabase Dashboard → SQL Editor and run the CREATE TABLE SQL."
+                )
+            else:
+                logger.error(f"❌ Failed to connect to Supabase: {e}")
             self._connected = False
 
     def store_event(self, event: OSINTEvent) -> Optional[str]:
