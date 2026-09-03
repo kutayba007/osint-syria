@@ -6,9 +6,25 @@ Serves OSINT events, statistics, and real-time updates to the React dashboard.
 import asyncio
 import json
 import logging
+import subprocess
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
+
+
+def _git_sha() -> str:
+    """Best-effort short git commit SHA for deploy verification."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+GIT_SHA = _git_sha()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -219,6 +235,7 @@ async def root():
     return {
         "name": "OSINT Syria API",
         "version": "1.0.0",
+        "git_sha": GIT_SHA,
         "status": "operational",
         "endpoints": {
             "incidents": "/api/incidents",
@@ -237,6 +254,7 @@ async def health_check():
     return {
         "status": "healthy" if db_ok else "degraded",
         "database": "connected" if db_ok else "disconnected",
+        "git_sha": GIT_SHA,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
