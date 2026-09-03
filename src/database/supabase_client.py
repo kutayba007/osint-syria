@@ -152,8 +152,22 @@ class SupabaseDB:
 
     def connect(self):
         """Establish connection to Supabase."""
+        url = (config.supabase.url or "").strip()
+        key = (config.supabase.key or "").strip()
+
+        if not url or not key:
+            logger.error(
+                "❌ Supabase not configured: SUPABASE_URL / SUPABASE_KEY environment "
+                "variables are missing. Set them on the deployment (Render Dashboard) "
+                "or in .env for local dev."
+            )
+            self._connected = False
+            return
+
         try:
-            self.client = create_client(config.supabase.url, config.supabase.key)
+            self.client = create_client(url, key)
+            # Verify connectivity — a bad key/URL fails fast here.
+            self.client.table(TABLE_NAME).select("id").limit(1).execute()
             self._connected = True
             logger.info("✅ Connected to Supabase")
         except Exception as e:
